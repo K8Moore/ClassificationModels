@@ -1,0 +1,298 @@
+# IMPORT PACKAGES
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import nltk
+from nltk import word_tokenize          
+from nltk.stem import WordNetLemmatizer 
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.model_selection import train_test_split, StratifiedKFold, GridSearchCV, cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve, auc, f1_score, classification_report
+from sklearn.preprocessing import LabelEncoder
+
+
+
+# SILENCE THE WARNINGS :)
+import warnings
+warnings.filterwarnings('ignore') 
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=DeprecationWarning)
+
+
+
+# IMPORT THE DATA
+# Read in the Data from Internet File
+train_data=pd.read_csv("https://s3.amazonaws.com/mlsitetest/HW4_Text_train_data.csv")
+test_data=pd.read_csv("https://s3.amazonaws.com/mlsitetest/HW4_Text_test_data.csv")
+
+
+
+# EXPLORE THE DATA
+# Combine the Test and Training Data
+text = pd.concat([train_data, test_data])
+'''
+Note: I concatonate the data, instead of maintaining the original form of the data with a training and test data split. You do not have to do this. You can run this analysis with the original split (See below).
+
+# Example of alternative method, which maintains original split in the data
+X_train = train_data['Review'].values 
+y_train = train_data['Recommended'].values
+X_test = test_data['Review'].values 
+y_test = test_data['Recommended'].values 
+'''
+
+
+# EXPLORE THE DATA
+# Assign recommendation data to an object
+target = text['Recommended']
+
+target_count = target.value_counts()
+print('Class 0:', target_count[0])
+print('Class 1:', target_count[1])
+print('Proportion:', round(target_count[0] / target_count[1], 2))
+
+target_count.plot(kind='bar', title='Count (target)');
+'''
+Note: Looks like we have imbalanced data. This is pretty common, but often overlooked. This means that any accuracy scores are likely to be incorrect. Instead, we should use AUC / ROC scores, which we were instructed to do anyway :)
+'''
+
+
+
+# EXPLORE X DATA
+# Assign text data to an object
+review = text['Review']
+# Examine the data
+print("Length of Text: {} characters".format(len(review)))
+print ("")
+# Here I pick a random line from the reviews to print. I just want to see what it looks like.
+print("Text Sample:\n{}".format(review[123]))
+
+
+
+
+# VECTORIZE REVIEW COLUMN INTO X-MATRIX
+'''
+Note: The algorithms we are using can only work with numbers, not letters. So, we need to vectorize all text data. The CountVectorizer function provides a simple way to convert our letters to numbers. This is called tokenizing a collection of text documents. Source: https://machinelearningmastery.com/prepare-text-data-machine-learning-scikit-learn/
+'''
+# Vectorize
+count = CountVectorizer().fit(review)
+# Look at the CountVector... 
+print(count.vocabulary_)
+# Transform text into numbers
+X = count.transform(review)
+
+
+
+
+# CLEAN THE DATA
+# Remove stop words
+# These are 'stop-words'
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+print("Number of stop words: {}".format(len(ENGLISH_STOP_WORDS)))
+print("Every 10th stopword:\n{}".format(list(ENGLISH_STOP_WORDS)[::10]))
+# Here, I...  
+##  Limit vocabulary to meaningful words by deleting Stop-words
+##  Remove terms that appear too frequently, max_df
+##  Remove terms that appear too infrequently, min_df
+# Vectorize (again)
+count = CountVectorizer(stop_words="english", min_df = 5, max_df = 5).fit(review)
+X = count.transform(review)
+print("Vectorized X:\n{}".format(repr(X)))
+# Here's what the data looks like now
+feature_names = count.get_feature_names()
+print("Number of features: {}".format(len(feature_names)))
+print("First 10 features:\n{}".format(feature_names[:10]))
+print("Features 100 to 110:\n{}".format(feature_names[100:110]))
+print("Features 500 to 510:\n{}".format(feature_names[400:410]))
+print("Every 200th feature:\n{}".format(feature_names[::200]))
+
+
+
+# Stemming & Lemmetization
+'''
+Note: Stemming is the process of reducing a word to its word stem that affixes to suffixes and prefixes or to the roots of words known as a lemma. Source: https://searchenterpriseai.techtarget.com/definition/stemming. Here is more information about this: https://pythonprogramming.net/stemming-nltk-tutorial/
+
+Lemmatization, unlike Stemming, reduces the word to an actual word. Here is more information about both Stemming, Lemmatization, and the difference between them: https://www.datacamp.com/community/tutorials/stemming-lemmatization-python
+'''
+# You may also have to download these modules to update nltk
+## nltk.download('punkt') 
+## nltk.download('wordnet')
+# Instantiate nltk's Porter stemmer
+stemmer = nltk.stem.PorterStemmer()
+class LemmaTokenizer(object):
+    def __init__(self):
+        self.wnl = WordNetLemmatizer()
+    def __call__(self, doc):
+        return [self.wnl.lemmatize(t) for t in word_tokenize(doc)]
+# Define a count vectorizer with the custom tokenizer
+lemma_vect = CountVectorizer(tokenizer=LemmaTokenizer(), stop_words="english", min_df = 5, max_df = 5)
+# Examine the data
+print(lemma_vect.fit(review).get_feature_names())
+# Transform reviews using CountVectorizer with lemmatization
+X_lemma = lemma_vect.fit_transform(review)
+# Examine the data
+print("X_lemma: {}".format(repr(X_lemma)))
+
+
+
+
+# Rescaling the Data with Tf-idf
+# Define a tfid vectorizer with the custom tokenizer
+vect = TfidfVectorizer(tokenizer=LemmaTokenizer(), stop_words="english", min_df = 5, max_df = 5).fit(review)
+
+# Transform reviews using TfidfVectorizer with lemmatization
+X = vect.transform(review)
+
+# Examine the data
+print("X: {}".format(repr(X)))
+
+
+
+
+# Alright, now that we've cleaned the data... let's get this party started.
+
+
+
+
+# FUNCTION TO INSPECT ALL MODELS BY VISUALIZING THEIR COEFFICIENTS
+# Function for Visualizing Coefficients in Each Model
+def visualize_coefficients(coefficients, feature_names, n_top_features=25):
+
+    coefficients = coefficients.squeeze()
+    if coefficients.ndim > 1:
+        # this is not a row or column vector
+        raise ValueError("coeffients must be 1d array or column vector, got"
+                         " shape {}".format(coefficients.shape))
+    coefficients = coefficients.ravel()
+
+    if len(coefficients) != len(feature_names):
+        raise ValueError("Number of coefficients {} doesn't match number of"
+                         "feature names {}.".format(len(coefficients),
+                                                    len(feature_names)))
+    # get coefficients with large absolute values
+    coef = coefficients.ravel()
+    positive_coefficients = np.argsort(coef)[-n_top_features:]
+    negative_coefficients = np.argsort(coef)[:n_top_features]
+    interesting_coefficients = np.hstack([negative_coefficients,
+                                          positive_coefficients])
+    # plot them
+    plt.figure(figsize=(15, 5))
+    colors = ['#ff2020' if c < 0 else '#0000aa'
+              for c in coef[interesting_coefficients]]
+    plt.bar(np.arange(2 * n_top_features), coef[interesting_coefficients],
+            color=colors)
+    feature_names = np.array(feature_names)
+    plt.subplots_adjust(bottom=0.3)
+    plt.xticks(np.arange(2 * n_top_features),
+               feature_names[interesting_coefficients], rotation=60,
+               ha="right")
+    plt.ylabel("Coefficient magnitude")
+    plt.xlabel("Features")
+
+
+
+
+# RUN THREE MODELS AND SELECT THE MODEL WITH THE BEST FIT TO THE DATA
+# Model 1: Logistic Regression
+# Test for Best Model Parameters of the Weighted Logistic Regression Model with GridSearch & Cross Validation 
+# using a metric appropriate for imbalanced classification (AUC), scoring = 'roc_auc'
+param_grid = {'C': [0.001, 0.01, 0.1, 1, 10]}
+grid = GridSearchCV(LogisticRegression(), param_grid, cv=cv, scoring='roc_auc').fit(X_train, y_train)
+grid_1 = grid.best_score_
+print("WEIGHTED LOGISTIC REGRESSION")
+print("Best cross-validation score: {:.2f}".format(grid.best_score_))
+print("Best parameters: ", grid.best_params_)
+
+# Visualize Coefficients for Logistic Regression Model with Best Parameters
+coefs = LogisticRegression(C=.1).fit(X_test,y_test).coef_
+feature_names = vect.get_feature_names()
+visualize_coefficients(coefs, feature_names, n_top_features=15)
+# Evaluate Model Using AUC
+y_predict = grid.predict(X_test)
+auc_1 = roc_auc_score(y_test, y_predict)
+# Evaluate Model Using Test Data 
+grid.fit(X_test, y_test)
+print("MODEL 1: WEIGHTED LOGISTIC REGRESSION")
+# AUC Score: Probability that the model ranks a random positive example more highly than a random negative example
+print("AUC Score: {:.2f}".format(auc_1))
+print("")
+print(classification_report(y_test, y_predict))
+
+# Model 2: Penalized Logistic Regression, weighted with tf-idf
+# Test for Best Model Parameters of the Logistic Regression Model with GridSearch & Cross Validation
+param_grid = {'C': [0.001, 0.01, 0.1, 1, 10]}
+grid = GridSearchCV(LogisticRegression(penalty='l1'), param_grid, cv=cv, scoring='roc_auc').fit(X_train, y_train)
+grid_2 = grid.best_score_
+print("WEIGHTED PENALIZED LOGISTIC REGRESSION")
+print("Best cross-validation score: {:.2f}".format(grid.best_score_))
+print("Best parameters: ", grid.best_params_)
+
+# Visualize Coefficients for Weighted Penalized Logistic Regression
+coefs = LogisticRegression(penalty='l1', C=10).fit(X_test,y_test).coef_
+feature_names = vect.get_feature_names()
+visualize_coefficients(coefs, feature_names, n_top_features=15)
+# Evaluate Model Using AUC
+y_predict = grid.predict(X_test)
+auc_2 = roc_auc_score(y_test, y_predict)
+# Evaluating Model Using Test Data 
+grid.fit(X_test, y_test)
+print("MODEL 2: WEIGHTED PENALIZED LOGISTIC REGRESSION")
+# AUC Score
+print("AUC Score: {:.2f}".format(auc_2))
+print("")
+print(classification_report(y_test, y_predict))
+
+## Model 3: Penalized Logistic Regression with Bigrams, weighted with tf-idf
+# Build the Bigram Model
+bigrams_vect = TfidfVectorizer(tokenizer=LemmaTokenizer(), stop_words="english", ngram_range=(2, 2), min_df = 5, max_df = 5).fit(review)
+# Remember to transform your data!
+X = bigrams_vect.transform(review)
+# Examine the data
+print("X: {}".format(repr(X)))
+# Remember to split your data, too!
+X = X
+y = text['Recommended']
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=42)
+
+# Test for Best Model Parameters of  Logistic Regression Model with GridSearch & Cross Validation
+param_grid = {'C': [0.001, 0.01, 0.1, 1, 10, 100]}
+grid = GridSearchCV(LogisticRegression(penalty='l1'), param_grid, cv=cv, scoring='roc_auc').fit(X_train, y_train)
+grid_3 = grid.best_score_
+print("WEIGHTED PENALIZED LOGISTIC REGRESSION with BIGRAMS")
+print("Best cross-validation score: {:.2f}".format(grid.best_score_))
+print("Best parameters: ", grid.best_params_)
+
+# Visualize Coefficients for Weighted Penalized Logistic Regression
+coefs = LogisticRegression(penalty='l1', C=10).fit(X_test,y_test).coef_
+feature_names = bigrams_vect.get_feature_names()  # Notice, here that I'm using bigrams_vect to get features names
+visualize_coefficients(coefs, feature_names, n_top_features=15)
+# Evaluate Model Using AUC
+y_predict = grid.predict(X_test)
+auc_3 = roc_auc_score(y_test, y_predict)
+# Evaluating Model Using Test Data 
+grid.fit(X_test, y_test)
+print("MODEL 2: WEIGHTED PENALIZED LOGISTIC REGRESSION with BIGRAMS")
+# AUC Score
+print("AUC Score: {:.2f}".format(auc_3))
+print("")
+print(classification_report(y_test, y_predict))
+
+
+
+
+# COMPARE MODELS
+# Summary of Training Results
+print("SUMMARY OF AUC SCORES from TRAINING")
+print("Logistic Regression: {:.2f}".format(grid_1))
+print("Penalized Logistic Regression: {:.2f}".format(grid_2))
+print("Penalized Logistic Regression with Bigrams: {:.2f}".format(grid_3))
+
+
+
+# EVALUATE THE MODEL USING THE TEST DATA
+# Summary of Test Results
+print("SUMMARY OF AUC SCORES")
+print("Logistic Regression: {:.2f}".format(auc_1))
+print("Penalized Logistic Regression: {:.2f}".format(auc_2))
+print("Penalized Logistic Regression with Bigrams: {:.2f}".format(auc_3))
